@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/bin/ls:*)",
+      "mcp__brave__brave_web_search"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
