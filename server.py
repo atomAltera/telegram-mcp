@@ -1,0 +1,174 @@
+"""Telegram MCP server (read-only).
+
+Exposes a small set of tools that let an AI agent read Telegram channel history
+and join channels. The server expects an already-authorized session (created by
+`authorize.py`); it never prompts for credentials at runtime, which makes it
+safe to run headless inside a container.
+
+Run:
+    python server.py            # serves streamable HTTP on MCP_HOST:MCP_PORT
+"""
+
+import os
+from contextlib import asynccontextmanager
+from datetime import datetime
+
+from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
+from telethon.errors import FloodWaitError
+from telethon.tl.functions.channels import JoinChannelRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest
+
+from client import (
+    ChannelInfo,
+    MessageInfo,
+    build_client,
+    primary_username,
+    serialize_channel,
+    serialize_message,
+)
+from telethon.tl.types import Channel, Chat, User
+
+client = build_client()
+
+
+@asynccontextmanager
+async def lifespan(server: FastMCP):
+    """Connect the Telegram client for the server's lifetime.
+
+    Fails fast if the session is missing/unauthorized so the operator gets a
+    clear message instead of every tool call erroring later.
+    """
+    await client.connect()
+    if not await client.is_user_authorized():
+        raise RuntimeError(
+            "Telegram session is not authorized. Run `python authorize.py` first "
+            "and make sure the session file / TG_SESSION_STRING is provided."
+        )
+    try:
+        yield
+    finally:
+        await client.disconnect()
+
+
+mcp = FastMCP(name="Telegram", lifespan=lifespan)
+
+
+# --- Helpers ---------------------------------------------------------------
+
+def _normalize_target(channel: str):
+    """Turn user-supplied channel reference into something get_entity accepts.
+
+    Accepts @username, https://t.me/... links, or a numeric id.
+    """
+    channel = channel.strip()
+    if channel.lstrip("-").isdigit():
+        return int(channel)
+    return channel
+
+
+async def _resolve(channel: str):
+    """Resolve a channel reference to a Telethon entity, with clean errors."""
+    try:
+        return await client.get_entity(_normalize_target(channel))
+    except FloodWaitError as e:
+        raise ToolError(f"Rate limited by Telegram; retry in {e.seconds}s.") from e
+    except (ValueError, TypeError) as e:
+        raise ToolError(
+            f"Could not resolve channel '{channel}'. Use a public @username, a "
+            f"t.me link, or an id of a chat you already have access to."
+        ) from e
+
+
+# --- Tools -----------------------------------------------------------------
+
+@mcp.tool
+async def list_channels() -> list[ChannelInfo]:
+    """List all channels and groups the account has joined (excludes private chats)."""
+    channels: list[ChannelInfo] = []
+    async for dialog in client.iter_dialogs():
+        entity = dialog.entity
+        if isinstance(entity, User):
+            continue
+        if isinstance(entity, (Channel, Chat)):
+            channels.append(serialize_channel(entity))
+    return channels
+
+
+@mcp.tool
+async def read_channel_messages(
+    channel: str,
+    limit: int = 50,
+    offset_date: str | None = None,
+    min_id: int | None = None,
+) -> list[MessageInfo]:
+    """Read recent messages from a channel or group, newest first.
+
+    Public channels are read without joining. Use `offset_date` (ISO-8601) or
+    `min_id` to page through older/newer history across multiple calls.
+
+    Args:
+        channel: @username, t.me link, or numeric id.
+        limit: Maximum number of messages to return.
+        offset_date: Only return messages older than this ISO-8601 timestamp.
+        min_id: Only return messages with id greater than this (for newer pages).
+    """
+    entity = await _resolve(channel)
+    username = primary_username(entity)
+
+    parsed_date = None
+    if offset_date:
+        try:
+            parsed_date = datetime.fromisoformat(offset_date)
+        except ValueError as e:
+            raise ToolError(f"Invalid offset_date '{offset_date}': expected ISO-8601.") from e
+
+    messages: list[MessageInfo] = []
+    try:
+        async for message in client.iter_messages(
+            entity,
+            limit=limit,
+            offset_date=parsed_date,
+            min_id=min_id or 0,
+        ):
+            messages.append(serialize_message(message, username))
+    except FloodWaitError as e:
+        raise ToolError(f"Rate limited by Telegram; retry in {e.seconds}s.") from e
+    return messages
+
+
+@mcp.tool
+async def join_channel(channel: str) -> ChannelInfo:
+    """Join a channel or group so the account can read private/members-only history.
+
+    Not needed to read public channels — use only for private invite links or
+    when membership is required.
+
+    Args:
+        channel: @username, public t.me link, or a t.me/+HASH invite link.
+    """
+    ref = channel.strip()
+    try:
+        # Private invite link: t.me/+HASH or t.me/joinchat/HASH
+        if "t.me/+" in ref or "joinchat/" in ref:
+            invite_hash = ref.split("+")[-1].split("joinchat/")[-1].rstrip("/")
+            updates = await client(ImportChatInviteRequest(invite_hash))
+            entity = updates.chats[0]
+        else:
+            entity = await _resolve(ref)
+            await client(JoinChannelRequest(entity))
+        return serialize_channel(entity)
+    except FloodWaitError as e:
+        raise ToolError(f"Rate limited by Telegram; retry in {e.seconds}s.") from e
+    except ToolError:
+        raise
+    except Exception as e:  # surface Telegram errors cleanly
+        raise ToolError(f"Failed to join '{channel}': {e}") from e
+
+
+if __name__ == "__main__":
+    mcp.run(
+        transport="http",
+        host=os.getenv("MCP_HOST", "0.0.0.0"),
+        port=int(os.getenv("MCP_PORT", "8000")),
+    )

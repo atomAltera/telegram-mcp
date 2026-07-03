@@ -1,7 +1,7 @@
 [project]
 name = "telegram-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Read-only Telegram MCP server for AI agents (read channel history, join channels)."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

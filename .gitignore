@@ -218,3 +218,9 @@ __marimo__/
 # Telegram session files (contains authentication data)
 *.session
 *.session-journal
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Local deployment config (host-specific volumes/ports; not committed)
+docker-compose.yml
