@@ -63,25 +63,35 @@ Defined with the `@mcp.tool` decorator on async functions in `server.py`:
 
 ## Development Commands
 
-`Makefile` targets (all wrap `uv`):
+`Makefile` targets:
 
 ```bash
 make install     # uv sync
 make authorize   # one-time interactive login -> telegram-mcp.session
 make run         # run server locally (HTTP :8000)
-make build       # docker compose build
-make up          # docker compose up (needs API_ID, API_HASH, session file)
-make down        # docker compose down
-make shell       # shell into the image
-make clean       # remove the image
+make build       # docker build -t $(IMAGE):$(TAG) .  (IMAGE ?= atomaltera/telegram-mcp, TAG ?= latest)
+make push        # build, then docker push $(IMAGE):$(TAG)
+make shell       # shell into the built image
+make clean       # remove the local image
 ```
+
+For local container testing there's also `docker-compose.yml` (not committed — host-specific
+volumes/ports), used directly via `docker compose up --build`, not through the Makefile.
 
 ## Docker
 
-`Dockerfile` (uv, python:3.13-slim) installs from `uv.lock` and runs `server.py`.
-`docker-compose.yml` mounts `./telegram-mcp.session` into the container at
-`/data/telegram-mcp.session` (`TG_SESSION=/data/telegram-mcp`) and passes `API_ID`/
-`API_HASH` through from the environment.
+`Dockerfile` (uv, python:3.13-slim) installs from `uv.lock`, copies the app, then adds a
+fixed non-root user (`useradd --uid 1000 ... && USER appuser`) so a host-mounted session
+file owned by uid 1000 is readable/writable by the process. Runs `server.py`.
+
+The image is published to Docker Hub as `atomaltera/telegram-mcp` (multi-arch:
+`linux/amd64` + `linux/arm64`, built with `docker buildx build --platform ... --push` when
+publishing from a single-arch machine — plain `make push` only builds for the local arch).
+
+Production deployment (pulling the image, mounting the session at
+`/data/telegram-mcp.session` with uid-1000 permissions, joining a dedicated Docker network
+so other services can reach `http://telegram-mcp:8000/mcp/`) is managed outside this repo,
+via Ansible.
 
 ## Single instance & ban safety
 

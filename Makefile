@@ -1,4 +1,7 @@
-.PHONY: install authorize run build up down shell clean
+.PHONY: install authorize run build push shell clean
+
+IMAGE ?= atomaltera/telegram-mcp
+TAG ?= latest
 
 # Install dependencies into the local .venv via uv.
 install:
@@ -14,19 +17,16 @@ run:
 
 # Build the Docker image.
 build:
-	docker compose build
+	docker build -t $(IMAGE):$(TAG) .
 
-# Run the containerized server (requires API_ID, API_HASH and a session file).
-up:
-	docker compose up
-
-down:
-	docker compose down
+# Publish the Docker image to Docker Hub.
+push: build
+	docker push $(IMAGE):$(TAG)
 
 # Open a shell in the built image for debugging.
 shell:
-	docker compose run --rm --entrypoint sh telegram-mcp
+	docker run --rm -it --entrypoint sh $(IMAGE):$(TAG)
 
 # Remove the Docker image.
 clean:
-	docker image rm telegram-mcp || true
+	docker image rm $(IMAGE):$(TAG) || true

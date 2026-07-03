@@ -223,5 +223,8 @@ __marimo__/
 # Local Claude Code settings
 .claude/settings.local.json
 
+# Ad-hoc data dumps (not source code, kept local for inspection only)
+dumps/
+
 # Local deployment config (host-specific volumes/ports; not committed)
 docker-compose.yml

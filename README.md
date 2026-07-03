@@ -61,12 +61,29 @@ Point an MCP client at `http://localhost:8000/mcp/`.
 
 ## Run in Docker
 
-The session file is mounted into the container; API credentials are passed as env vars.
-From a host that already has `telegram-mcp.session`:
+For local testing, `docker-compose.yml` (not committed — host-specific) builds and runs the
+image with the session file mounted and API credentials passed as env vars:
 
 ```sh
-API_ID=... API_HASH=... make up      # docker compose up
+API_ID=... API_HASH=... docker compose up --build
 ```
+
+## Publish the image
+
+```sh
+make build            # docker build -t atomaltera/telegram-mcp:latest .
+make push             # build, then docker push
+```
+
+Override `IMAGE`/`TAG` to publish elsewhere, e.g. `make push IMAGE=myuser/telegram-mcp`.
+For a multi-arch push (needed if the deployment host isn't the same CPU arch as this
+machine), use `docker buildx build --platform linux/amd64,linux/arm64 -t $(IMAGE):$(TAG) --push .`
+instead of plain `make push`.
+
+## Deploy
+
+Production deployment (pulling the published image, mounting the session with uid-1000
+permissions, joining a dedicated Docker network) is managed outside this repo via Ansible.
 
 ## Configuration (environment)
 
