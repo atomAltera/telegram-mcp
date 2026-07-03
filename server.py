@@ -18,6 +18,7 @@ from datetime import datetime
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.utilities.types import Image
 from telethon.errors import FloodWaitError
 from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
@@ -28,7 +29,7 @@ from client import (
     build_client,
     primary_username,
     serialize_channel,
-    serialize_message,
+    serialize_messages,
 )
 from telethon.tl.types import Channel, Chat, User
 
@@ -36,6 +37,10 @@ from telethon.tl.types import Channel, Chat, User
 # hammering the API (a fast way to get rate-limited or flagged). Override with
 # TG_MAX_LIMIT if you know what you're doing.
 MAX_MESSAGE_LIMIT = int(os.getenv("TG_MAX_LIMIT", "100"))
+
+# Hard cap on photo size we'll download for get_message_media, in bytes.
+# Base64-encoding inflates this by ~33% before it reaches the calling agent.
+MAX_MEDIA_BYTES = int(os.getenv("TG_MAX_MEDIA_BYTES", str(15 * 1024 * 1024)))
 
 client = build_client()
 
@@ -178,7 +183,7 @@ async def read_channel_messages(
         except ValueError as e:
             raise ToolError(f"Invalid offset_date '{offset_date}': expected ISO-8601.") from e
 
-    messages: list[MessageInfo] = []
+    raw_messages = []
     try:
         async for message in client.iter_messages(
             entity,
@@ -186,10 +191,53 @@ async def read_channel_messages(
             offset_date=parsed_date,
             min_id=min_id or 0,
         ):
-            messages.append(serialize_message(message, username))
+            raw_messages.append(message)
     except FloodWaitError as e:
         raise ToolError(f"Rate limited by Telegram; retry in {e.seconds}s.") from e
-    return messages
+    return serialize_messages(raw_messages, username)
+
+
+@mcp.tool
+async def get_message_media(channel: str, message_id: int) -> Image:
+    """Download a message's photo so a multimodal agent can view/analyze it.
+
+    Only static photos are supported (not videos or generic file attachments).
+    For an album (see `read_channel_messages`'s "album x N" media_type), pass
+    the id it returned, or any other message id from that album — each photo
+    in an album is a distinct, individually downloadable image.
+
+    Args:
+        channel: @username, t.me link, or numeric id.
+        message_id: The message id, e.g. from read_channel_messages' `id` field.
+    """
+    entity = await _resolve(channel)
+    try:
+        message = await client.get_messages(entity, ids=message_id)
+    except FloodWaitError as e:
+        raise ToolError(f"Rate limited by Telegram; retry in {e.seconds}s.") from e
+
+    if message is None:
+        raise ToolError(f"Message {message_id} not found in '{channel}'.")
+    if not message.photo:
+        raise ToolError(
+            f"Message {message_id} in '{channel}' has no photo to download "
+            f"(it may be text-only, a video, or another file type)."
+        )
+    if message.file and message.file.size and message.file.size > MAX_MEDIA_BYTES:
+        raise ToolError(
+            f"Photo is {message.file.size} bytes, over the {MAX_MEDIA_BYTES}-byte limit."
+        )
+
+    try:
+        data = await client.download_media(message, file=bytes)
+    except FloodWaitError as e:
+        raise ToolError(f"Rate limited by Telegram; retry in {e.seconds}s.") from e
+    if not data:
+        raise ToolError(f"Could not download the photo for message {message_id}.")
+
+    mime_type = message.file.mime_type if message.file else None
+    fmt = mime_type.split("/")[-1] if mime_type else "jpeg"
+    return Image(data=data, format=fmt)
 
 
 @mcp.tool

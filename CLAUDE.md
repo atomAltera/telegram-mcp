@@ -53,7 +53,16 @@ Defined with the `@mcp.tool` decorator on async functions in `server.py`:
 - `list_channels()` → `list[ChannelInfo]` — joined channels/groups (skips `User` chats).
 - `read_channel_messages(channel, limit=50, offset_date=None, min_id=None)` →
   `list[MessageInfo]` — resolves `channel` (public channels need no join) and iterates
-  history newest-first. Paging via `offset_date` (ISO-8601) / `min_id`.
+  history newest-first. Paging via `offset_date` (ISO-8601) / `min_id`. Album messages
+  (shared Telegram `grouped_id`) are collapsed into one entry via `serialize_messages()`
+  in `client.py` — only one message per album otherwise carries the caption, so naive
+  per-message serialization made every other photo look caption-less.
+- `get_message_media(channel, message_id)` → `fastmcp.utilities.types.Image` — downloads a
+  message's photo (via `client.download_media`) so a multimodal agent can view/analyze it.
+  Photos only (checks `message.photo`); size-capped by `TG_MAX_MEDIA_BYTES` (default 15 MB).
+  Not wired into `read_channel_messages` on purpose — embedding images in bulk history reads
+  would balloon every call with base64 payloads; fetch media only for the specific message
+  that needs it.
 - `join_channel(channel)` → `ChannelInfo` — `JoinChannelRequest` for public refs,
   `ImportChatInviteRequest` for `t.me/+`/`joinchat/` invite links.
 

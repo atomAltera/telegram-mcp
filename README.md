@@ -20,7 +20,10 @@ runs headless (e.g. in Docker) against an already-authorized session.
 - `list_channels()` — channels/groups the account has joined.
 - `read_channel_messages(channel, limit=50, offset_date=None, min_id=None)` — read
   history newest-first. Public channels are read **without joining**. Page with
-  `offset_date` (ISO-8601) or `min_id`.
+  `offset_date` (ISO-8601) or `min_id`. Multi-photo albums are returned as one entry
+  with the shared caption, not one caption-less row per extra photo.
+- `get_message_media(channel, message_id)` — download a message's photo as an MCP image
+  block, for a multimodal agent to view/analyze directly. Photos only.
 - `join_channel(channel)` — join a public channel or a private invite link.
 
 `channel` accepts a `@username`, a `https://t.me/...` link, or a numeric id.
@@ -97,6 +100,7 @@ permissions, joining a dedicated Docker network) is managed outside this repo vi
 | `MCP_HOST`          | `0.0.0.0`        | Bind host.                                         |
 | `MCP_PORT`          | `8000`           | Bind port.                                         |
 | `TG_MAX_LIMIT`      | `100`            | Max messages a single read may return.             |
+| `TG_MAX_MEDIA_BYTES`| `15728640` (15MB)| Max photo size `get_message_media` will download.  |
 
 ## ⚠️ One session, one instance
 

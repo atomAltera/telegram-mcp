@@ -148,3 +148,40 @@ def serialize_message(message: Message, channel_username: str | None) -> Message
         media_type=type(media).__name__ if media is not None else None,
         url=url,
     )
+
+
+def serialize_messages(messages: list[Message], channel_username: str | None) -> list[MessageInfo]:
+    """Turn a batch of Telethon Messages into MessageInfo, collapsing albums.
+
+    Telegram splits one caption across all messages of an album (shared
+    `grouped_id`): only one message carries the text, the rest have an empty
+    `.message`. Serialized individually, every other photo in the album looks
+    like uncaptioned media even though the post has a (possibly long) caption.
+    This emits one entry per album, using whichever sibling has the caption.
+    """
+    groups: dict[int, list[Message]] = {}
+    order: list[tuple[str, object]] = []
+
+    for m in messages:
+        if m.grouped_id is not None:
+            group = groups.setdefault(m.grouped_id, [])
+            if not group:
+                order.append(("group", m.grouped_id))
+            group.append(m)
+        else:
+            order.append(("single", m))
+
+    result = []
+    for kind, value in order:
+        if kind == "single":
+            result.append(serialize_message(value, channel_username))
+            continue
+        group = groups[value]
+        anchor = group[0]  # first-encountered = newest, since iteration is newest-first
+        caption_source = next((m for m in group if m.message), anchor)
+        info = serialize_message(anchor, channel_username)
+        info.text = caption_source.message or ""
+        if info.media_type:
+            info.media_type = f"{info.media_type} (album x{len(group)})"
+        result.append(info)
+    return result
