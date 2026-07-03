@@ -9,7 +9,10 @@ Run:
     python server.py            # serves streamable HTTP on MCP_HOST:MCP_PORT
 """
 
+import fcntl
+import hashlib
 import os
+import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -29,16 +32,65 @@ from client import (
 )
 from telethon.tl.types import Channel, Chat, User
 
+# Hard cap on how many messages a single read can pull, to avoid an agent
+# hammering the API (a fast way to get rate-limited or flagged). Override with
+# TG_MAX_LIMIT if you know what you're doing.
+MAX_MESSAGE_LIMIT = int(os.getenv("TG_MAX_LIMIT", "100"))
+
 client = build_client()
+
+# Held open for the whole process so the single-instance lock stays acquired.
+_lock_file = None
+
+
+def _lock_path() -> str:
+    """A lock path unique to this session's identity.
+
+    File-based session -> a sidecar next to it; StringSession -> a temp file
+    keyed by a hash of the string. Two processes on the same session collide.
+    """
+    session_string = os.getenv("TG_SESSION_STRING")
+    if session_string:
+        digest = hashlib.sha256(session_string.encode()).hexdigest()[:16]
+        return os.path.join(tempfile.gettempdir(), f"telegram-mcp-{digest}.lock")
+    name = os.getenv("TG_SESSION", "telegram-mcp")
+    if not name.endswith(".session"):
+        name += ".session"
+    return name + ".lock"
+
+
+def _acquire_single_instance_lock() -> None:
+    """Refuse to start if another server already owns this session.
+
+    Running two clients against one session risks AUTH_KEY_DUPLICATED, which
+    invalidates the session and forces re-authorization.
+    """
+    global _lock_file
+    path = _lock_path()
+    _lock_file = open(path, "w")
+    try:
+        fcntl.flock(_lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        _lock_file.close()
+        _lock_file = None
+        raise RuntimeError(
+            f"Another Telegram MCP instance is already using this session "
+            f"(lock held on {path}). Running two clients on one session can get "
+            f"the session revoked — refusing to start a second one."
+        ) from e
+    _lock_file.write(f"{os.getpid()}\n")
+    _lock_file.flush()
 
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     """Connect the Telegram client for the server's lifetime.
 
-    Fails fast if the session is missing/unauthorized so the operator gets a
-    clear message instead of every tool call erroring later.
+    Fails fast if another instance holds the session lock, or if the session is
+    missing/unauthorized, so the operator gets a clear message instead of every
+    tool call erroring later (or the session getting revoked).
     """
+    _acquire_single_instance_lock()
     await client.connect()
     if not await client.is_user_authorized():
         raise RuntimeError(
@@ -49,6 +101,8 @@ async def lifespan(server: FastMCP):
         yield
     finally:
         await client.disconnect()
+        if _lock_file is not None:
+            _lock_file.close()
 
 
 mcp = FastMCP(name="Telegram", lifespan=lifespan)
@@ -113,6 +167,7 @@ async def read_channel_messages(
         offset_date: Only return messages older than this ISO-8601 timestamp.
         min_id: Only return messages with id greater than this (for newer pages).
     """
+    limit = max(1, min(limit, MAX_MESSAGE_LIMIT))
     entity = await _resolve(channel)
     username = primary_username(entity)
 

@@ -83,6 +83,23 @@ make clean       # remove the image
 `/data/telegram-mcp.session` (`TG_SESSION=/data/telegram-mcp`) and passes `API_ID`/
 `API_HASH` through from the environment.
 
+## Single instance & ban safety
+
+**One session = one running process.** Two Telegram clients connected with the same session
+simultaneously can trigger `AUTH_KEY_DUPLICATED`, which **revokes the session** and forces
+re-authorization. To prevent this, `server.py` takes a non-blocking `fcntl.flock` at startup
+(`_acquire_single_instance_lock`, sidecar `<session>.lock`, held for the process lifetime); a
+second instance on the same session **fails fast** instead of starting. Do not run the server
+locally and on the remote host against the *same* session at the same time — give each host its
+own authorized session, or run only one.
+
+Other ban-avoidance measures baked in:
+- `read_channel_messages` clamps `limit` to `MAX_MESSAGE_LIMIT` (env `TG_MAX_LIMIT`, default 100)
+  so an agent can't hammer the API with huge history pulls.
+- Joining is a separate, explicit tool (never automatic) — mass/rapid joins are a classic
+  ban trigger.
+- `FloodWaitError` is surfaced (not swallowed) so the agent backs off.
+
 ## Important Notes
 
 - **Never add elicitation/auth to `server.py`.** The server assumes an authorized session;

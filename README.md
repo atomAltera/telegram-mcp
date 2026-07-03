@@ -78,6 +78,15 @@ API_ID=... API_HASH=... make up      # docker compose up
 | `TG_SESSION_STRING` | —                | If set, use an in-memory StringSession (no file).  |
 | `MCP_HOST`          | `0.0.0.0`        | Bind host.                                         |
 | `MCP_PORT`          | `8000`           | Bind port.                                         |
+| `TG_MAX_LIMIT`      | `100`            | Max messages a single read may return.             |
+
+## ⚠️ One session, one instance
+
+Do **not** run two servers against the **same** session at once (e.g. locally *and* on the
+remote host). Two clients sharing one session can trigger Telegram's `AUTH_KEY_DUPLICATED`,
+which revokes the session. The server guards against this with a startup file lock and refuses
+to start a second instance on the same session — but the safest rule is one authorized session
+per host. Keep reads modest (`TG_MAX_LIMIT`) and avoid rapid mass-joins to stay clear of bans.
 
 ## Example use case
 
