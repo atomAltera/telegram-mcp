@@ -69,8 +69,8 @@ Defined with the `@mcp.tool` decorator on async functions in `server.py`:
 make install     # uv sync
 make authorize   # one-time interactive login -> telegram-mcp.session
 make run         # run server locally (HTTP :8000)
-make build       # docker build -t $(IMAGE):$(TAG) .  (IMAGE ?= atomaltera/telegram-mcp, TAG ?= latest)
-make push        # build, then docker push $(IMAGE):$(TAG)
+make build       # docker build -t $(IMAGE):$(TAG) .  local arch only (IMAGE ?= atomaltera/telegram-mcp, TAG ?= latest)
+make push        # multi-arch buildx build --platform $(PLATFORMS) --push (PLATFORMS ?= linux/amd64,linux/arm64)
 make shell       # shell into the built image
 make clean       # remove the local image
 ```
@@ -84,9 +84,13 @@ volumes/ports), used directly via `docker compose up --build`, not through the M
 fixed non-root user (`useradd --uid 1000 ... && USER appuser`) so a host-mounted session
 file owned by uid 1000 is readable/writable by the process. Runs `server.py`.
 
-The image is published to Docker Hub as `atomaltera/telegram-mcp` (multi-arch:
-`linux/amd64` + `linux/arm64`, built with `docker buildx build --platform ... --push` when
-publishing from a single-arch machine — plain `make push` only builds for the local arch).
+The image is published to Docker Hub as `atomaltera/telegram-mcp`, always multi-arch
+(`linux/amd64` + `linux/arm64`) via `make push` (buildx). **Never** publish with a plain
+`docker build && docker push` — it only builds the local arch and silently overwrites the
+existing multi-arch manifest with a single-arch one, breaking `docker compose pull` on any
+other architecture. This actually happened once (deploy failed with `no matching manifest
+for linux/amd64/v3`); the Makefile's `push` target now always goes through buildx to make
+that mistake structurally impossible.
 
 Production deployment (pulling the image, mounting the session at
 `/data/telegram-mcp.session` with uid-1000 permissions, joining a dedicated Docker network

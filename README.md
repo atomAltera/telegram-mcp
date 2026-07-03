@@ -71,14 +71,15 @@ API_ID=... API_HASH=... docker compose up --build
 ## Publish the image
 
 ```sh
-make build            # docker build -t atomaltera/telegram-mcp:latest .
-make push             # build, then docker push
+make build            # docker build -t atomaltera/telegram-mcp:latest .  (local arch, fast inner loop)
+make push             # multi-arch (linux/amd64+arm64) buildx build --push
 ```
 
-Override `IMAGE`/`TAG` to publish elsewhere, e.g. `make push IMAGE=myuser/telegram-mcp`.
-For a multi-arch push (needed if the deployment host isn't the same CPU arch as this
-machine), use `docker buildx build --platform linux/amd64,linux/arm64 -t $(IMAGE):$(TAG) --push .`
-instead of plain `make push`.
+`push` always builds both architectures via `buildx`, regardless of which arch you're
+publishing from — deployment targets are often a different CPU arch than your dev machine,
+and a plain `docker build && docker push` would silently overwrite the multi-arch manifest
+with a single-arch one. Override `IMAGE`/`TAG`/`PLATFORMS` to publish elsewhere, e.g.
+`make push IMAGE=myuser/telegram-mcp`.
 
 ## Deploy
 
