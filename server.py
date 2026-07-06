@@ -24,11 +24,11 @@ from telethon.tl.functions.channels import JoinChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
 
 from client import (
-    ChannelInfo,
+    ChatInfo,
     MessageInfo,
     build_client,
     primary_username,
-    serialize_channel,
+    serialize_chat,
     serialize_messages,
 )
 from telethon.tl.types import Channel, Chat, User
@@ -142,39 +142,39 @@ async def _resolve(channel: str):
 # --- Tools -----------------------------------------------------------------
 
 @mcp.tool
-async def list_channels() -> list[ChannelInfo]:
-    """List all channels and groups the account has joined (excludes private chats)."""
-    channels: list[ChannelInfo] = []
+async def list_chats() -> list[ChatInfo]:
+    """List all chats the account has: channels, groups, and private (1-on-1) chats."""
+    chats: list[ChatInfo] = []
     async for dialog in client.iter_dialogs():
         entity = dialog.entity
-        if isinstance(entity, User):
-            continue
-        if isinstance(entity, (Channel, Chat)):
-            channels.append(serialize_channel(entity))
-    return channels
+        if isinstance(entity, (Channel, Chat, User)):
+            chats.append(serialize_chat(entity))
+    return chats
 
 
 @mcp.tool
-async def read_channel_messages(
-    channel: str,
+async def read_chat_messages(
+    chat: str,
     limit: int = 50,
     offset_date: str | None = None,
     min_id: int | None = None,
 ) -> list[MessageInfo]:
-    """Read recent messages from a channel or group, newest first.
+    """Read recent messages from a chat — a channel, group, or private chat — newest first.
 
-    Public channels are read without joining. Use `offset_date` (ISO-8601) or
-    `min_id` to page through older/newer history across multiple calls.
+    Public channels/groups are read without joining. Use `offset_date`
+    (ISO-8601) or `min_id` to page through older/newer history across calls.
 
     Args:
-        channel: @username, t.me link, or numeric id.
+        chat: @username, t.me link, or numeric id (of a channel, group, or user).
         limit: Maximum number of messages to return.
         offset_date: Only return messages older than this ISO-8601 timestamp.
         min_id: Only return messages with id greater than this (for newer pages).
     """
     limit = max(1, min(limit, MAX_MESSAGE_LIMIT))
-    entity = await _resolve(channel)
-    username = primary_username(entity)
+    entity = await _resolve(chat)
+    # A public t.me/<username>/<id> link exists only for channels/supergroups;
+    # basic groups and private chats have none, so don't fabricate one.
+    username = primary_username(entity) if isinstance(entity, Channel) else None
 
     parsed_date = None
     if offset_date:
@@ -198,29 +198,29 @@ async def read_channel_messages(
 
 
 @mcp.tool
-async def get_message_media(channel: str, message_id: int) -> Image:
+async def get_message_media(chat: str, message_id: int) -> Image:
     """Download a message's photo so a multimodal agent can view/analyze it.
 
     Only static photos are supported (not videos or generic file attachments).
-    For an album (see `read_channel_messages`'s "album x N" media_type), pass
+    For an album (see `read_chat_messages`'s "album x N" media_type), pass
     the id it returned, or any other message id from that album — each photo
     in an album is a distinct, individually downloadable image.
 
     Args:
-        channel: @username, t.me link, or numeric id.
-        message_id: The message id, e.g. from read_channel_messages' `id` field.
+        chat: @username, t.me link, or numeric id (of a channel, group, or user).
+        message_id: The message id, e.g. from read_chat_messages' `id` field.
     """
-    entity = await _resolve(channel)
+    entity = await _resolve(chat)
     try:
         message = await client.get_messages(entity, ids=message_id)
     except FloodWaitError as e:
         raise ToolError(f"Rate limited by Telegram; retry in {e.seconds}s.") from e
 
     if message is None:
-        raise ToolError(f"Message {message_id} not found in '{channel}'.")
+        raise ToolError(f"Message {message_id} not found in '{chat}'.")
     if not message.photo:
         raise ToolError(
-            f"Message {message_id} in '{channel}' has no photo to download "
+            f"Message {message_id} in '{chat}' has no photo to download "
             f"(it may be text-only, a video, or another file type)."
         )
     if message.file and message.file.size and message.file.size > MAX_MEDIA_BYTES:
@@ -241,16 +241,17 @@ async def get_message_media(channel: str, message_id: int) -> Image:
 
 
 @mcp.tool
-async def join_channel(channel: str) -> ChannelInfo:
-    """Join a channel or group so the account can read private/members-only history.
+async def join_chat(chat: str) -> ChatInfo:
+    """Join a channel or group so the account can read members-only history.
 
-    Not needed to read public channels — use only for private invite links or
-    when membership is required.
+    Applies to channels and groups only (you don't "join" a private chat). Not
+    needed to read public channels/groups — use only for private invite links
+    or when membership is required.
 
     Args:
-        channel: @username, public t.me link, or a t.me/+HASH invite link.
+        chat: @username, public t.me link, or a t.me/+HASH invite link.
     """
-    ref = channel.strip()
+    ref = chat.strip()
     try:
         # Private invite link: t.me/+HASH or t.me/joinchat/HASH
         if "t.me/+" in ref or "joinchat/" in ref:
@@ -260,13 +261,13 @@ async def join_channel(channel: str) -> ChannelInfo:
         else:
             entity = await _resolve(ref)
             await client(JoinChannelRequest(entity))
-        return serialize_channel(entity)
+        return serialize_chat(entity)
     except FloodWaitError as e:
         raise ToolError(f"Rate limited by Telegram; retry in {e.seconds}s.") from e
     except ToolError:
         raise
     except Exception as e:  # surface Telegram errors cleanly
-        raise ToolError(f"Failed to join '{channel}': {e}") from e
+        raise ToolError(f"Failed to join '{chat}': {e}") from e
 
 
 if __name__ == "__main__":

@@ -50,18 +50,21 @@ def build_client() -> TelegramClient:
 
 # --- Response schemas ------------------------------------------------------
 
-class ChannelInfo(BaseModel):
-    """Information about a Telegram channel or group."""
-    chat_id: int = Field(..., description="The unique identifier of the channel/group.")
-    chat_name: str = Field(..., description="The name/title of the channel/group.")
-    chat_type: str = Field(..., description="Type: 'channel', 'megagroup', or 'group'.")
+class ChatInfo(BaseModel):
+    """Information about a Telegram chat: a channel, group, or private (user) chat."""
+    chat_id: int = Field(..., description="The unique identifier of the chat.")
+    chat_name: str = Field(..., description="The name/title of the chat.")
+    chat_type: str = Field(
+        ...,
+        description="Type: 'channel', 'megagroup', 'group', or 'private'.",
+    )
     username: str | None = Field(None, description="Public @username, if any.")
     members_count: int | None = Field(None, description="Number of members, if available.")
 
 
 class MessageInfo(BaseModel):
-    """A single message fetched from a channel or group."""
-    id: int = Field(..., description="Message id within the channel.")
+    """A single message fetched from a chat (channel, group, or private chat)."""
+    id: int = Field(..., description="Message id within the chat.")
     date: str | None = Field(None, description="ISO-8601 timestamp of the message.")
     text: str = Field("", description="Message text (may be empty for media-only posts).")
     sender_name: str | None = Field(None, description="Display name of the author, if known.")
@@ -91,8 +94,16 @@ def primary_username(entity) -> str | None:
     return usernames[0].username if usernames else None
 
 
-def serialize_channel(entity) -> ChannelInfo:
-    """Turn a Telethon Channel/Chat entity into a ChannelInfo."""
+def _user_display_name(user: User) -> str:
+    """Human-readable name for a private (user) chat."""
+    parts = [p for p in (user.first_name, user.last_name) if p]
+    if parts:
+        return " ".join(parts)
+    return primary_username(user) or "Unknown"
+
+
+def serialize_chat(entity) -> ChatInfo:
+    """Turn a Telethon Channel/Chat/User entity into a ChatInfo."""
     if isinstance(entity, Channel):
         if entity.broadcast:
             chat_type = "channel"
@@ -102,12 +113,19 @@ def serialize_channel(entity) -> ChannelInfo:
             chat_type = "group"
     elif isinstance(entity, Chat):
         chat_type = "group"
+    elif isinstance(entity, User):
+        chat_type = "private"
     else:
         chat_type = "unknown"
 
-    return ChannelInfo(
+    if isinstance(entity, User):
+        chat_name = _user_display_name(entity)
+    else:
+        chat_name = getattr(entity, "title", None) or "Unknown"
+
+    return ChatInfo(
         chat_id=entity.id,
-        chat_name=getattr(entity, "title", None) or "Unknown",
+        chat_name=chat_name,
         chat_type=chat_type,
         username=primary_username(entity),
         members_count=getattr(entity, "participants_count", None),
@@ -129,12 +147,18 @@ def _sender_name(message: Message) -> str | None:
     return getattr(message, "post_author", None)
 
 
-def serialize_message(message: Message, channel_username: str | None) -> MessageInfo:
-    """Turn a Telethon Message into a MessageInfo."""
+def serialize_message(message: Message, chat_username: str | None) -> MessageInfo:
+    """Turn a Telethon Message into a MessageInfo.
+
+    `chat_username` is used only to build the public `t.me/<username>/<id>` link.
+    Pass it only for entities that actually have such links (public channels /
+    supergroups); pass None for basic groups and private chats, whose messages
+    have no public per-message URL.
+    """
     media = message.media
     url = None
-    if channel_username:
-        url = f"https://t.me/{channel_username}/{message.id}"
+    if chat_username:
+        url = f"https://t.me/{chat_username}/{message.id}"
 
     return MessageInfo(
         id=message.id,
@@ -150,7 +174,7 @@ def serialize_message(message: Message, channel_username: str | None) -> Message
     )
 
 
-def serialize_messages(messages: list[Message], channel_username: str | None) -> list[MessageInfo]:
+def serialize_messages(messages: list[Message], chat_username: str | None) -> list[MessageInfo]:
     """Turn a batch of Telethon Messages into MessageInfo, collapsing albums.
 
     Telegram splits one caption across all messages of an album (shared
@@ -174,12 +198,12 @@ def serialize_messages(messages: list[Message], channel_username: str | None) ->
     result = []
     for kind, value in order:
         if kind == "single":
-            result.append(serialize_message(value, channel_username))
+            result.append(serialize_message(value, chat_username))
             continue
         group = groups[value]
         anchor = group[0]  # first-encountered = newest, since iteration is newest-first
         caption_source = next((m for m in group if m.message), anchor)
-        info = serialize_message(anchor, channel_username)
+        info = serialize_message(anchor, chat_username)
         info.text = caption_source.message or ""
         if info.media_type:
             info.media_type = f"{info.media_type} (album x{len(group)})"

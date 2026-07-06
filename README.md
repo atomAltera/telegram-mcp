@@ -1,7 +1,8 @@
 # Telegram MCP Server
 
 A personal, **read-only** [MCP](https://modelcontextprotocol.io) server that lets an AI
-agent read Telegram channel/group history and join channels. Built on
+agent read Telegram history — from channels, groups, **and** private (1-on-1) chats —
+and join channels/groups. Built on
 [FastMCP](https://gofastmcp.com) + [Telethon](https://docs.telethon.dev).
 
 It does **not** send messages. Authorization is a separate one-time step; the server
@@ -12,21 +13,27 @@ runs headless (e.g. in Docker) against an already-authorized session.
 | File           | Role                                                                 |
 |----------------|----------------------------------------------------------------------|
 | `authorize.py` | One-time interactive login → creates the SQLite session database.    |
-| `client.py`    | Shared client factory + message/channel serialization.               |
+| `client.py`    | Shared client factory + message/chat serialization.                  |
 | `server.py`    | FastMCP server (HTTP transport) exposing the tools.                  |
 
 ## Tools
 
-- `list_channels()` — channels/groups the account has joined.
-- `read_channel_messages(channel, limit=50, offset_date=None, min_id=None)` — read
-  history newest-first. Public channels are read **without joining**. Page with
-  `offset_date` (ISO-8601) or `min_id`. Multi-photo albums are returned as one entry
-  with the shared caption, not one caption-less row per extra photo.
-- `get_message_media(channel, message_id)` — download a message's photo as an MCP image
-  block, for a multimodal agent to view/analyze directly. Photos only.
-- `join_channel(channel)` — join a public channel or a private invite link.
+The server works with any Telegram **chat** — a channel, a group, or a private
+(1-on-1) chat — not just channels.
 
-`channel` accepts a `@username`, a `https://t.me/...` link, or a numeric id.
+- `list_chats()` — every chat the account has: channels, groups, and private chats
+  (each tagged `chat_type`: `channel` / `megagroup` / `group` / `private`).
+- `read_chat_messages(chat, limit=50, offset_date=None, min_id=None)` — read
+  history newest-first from a channel, group, or private chat. Public channels/groups
+  are read **without joining**. Page with `offset_date` (ISO-8601) or `min_id`.
+  Multi-photo albums are returned as one entry with the shared caption, not one
+  caption-less row per extra photo.
+- `get_message_media(chat, message_id)` — download a message's photo as an MCP image
+  block, for a multimodal agent to view/analyze directly. Photos only.
+- `join_chat(chat)` — join a public channel/group or a private invite link. (Private
+  chats aren't joined — they're already accessible.)
+
+`chat` accepts a `@username`, a `https://t.me/...` link, or a numeric id.
 
 ## Setup
 
@@ -113,5 +120,5 @@ per host. Keep reads modest (`TG_MAX_LIMIT`) and avoid rapid mass-joins to stay 
 ## Example use case
 
 Give an agent a list of news channels and ask it to summarize what's happening: for each
-channel it calls `read_channel_messages("@channel", limit=30)`, then analyzes the returned
+channel it calls `read_chat_messages("@channel", limit=30)`, then analyzes the returned
 text/dates/view counts. No membership required for public channels.

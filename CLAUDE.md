@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 A personal, **read-only** Telegram MCP (Model Context Protocol) server built with FastMCP
-and Telethon. It lets AI agents read Telegram channel/group history and join channels. It
-does **not** send messages.
+and Telethon. It lets AI agents read Telegram history from any chat — channels, groups,
+**and** private (1-on-1) chats — and join channels/groups. It does **not** send messages.
 
 Authorization is a **separate one-time step** (`authorize.py`) that produces a session
 database. The server (`server.py`) runs headless against that session and never prompts for
@@ -26,9 +26,10 @@ Three source files (flat layout):
 
 - **`client.py`** — shared. `build_client()` constructs a `TelegramClient` from env
   (SQLite session via `TG_SESSION`, or an in-memory `StringSession` via
-  `TG_SESSION_STRING`). Pydantic response models `ChannelInfo` / `MessageInfo` and the
-  `serialize_channel` / `serialize_message` helpers live here. Connecting and authorizing
-  are the caller's responsibility.
+  `TG_SESSION_STRING`). Pydantic response models `ChatInfo` / `MessageInfo` and the
+  `serialize_chat` / `serialize_message` helpers live here (`serialize_chat` handles
+  `Channel`, `Chat`, and `User` entities). Connecting and authorizing are the caller's
+  responsibility.
 
 - **`authorize.py`** — standalone CLI. Calls `TelegramClient.start()`, which interactively
   prompts (on the terminal) for phone, login code, and 2FA password, then writes the
@@ -48,25 +49,32 @@ only work same-host.
 
 ## Tools (all read-only)
 
-Defined with the `@mcp.tool` decorator on async functions in `server.py`:
+Defined with the `@mcp.tool` decorator on async functions in `server.py`. Every tool speaks
+in terms of a **chat** (channel, group, or private user chat), not just channels:
 
-- `list_channels()` → `list[ChannelInfo]` — joined channels/groups (skips `User` chats).
-- `read_channel_messages(channel, limit=50, offset_date=None, min_id=None)` →
-  `list[MessageInfo]` — resolves `channel` (public channels need no join) and iterates
-  history newest-first. Paging via `offset_date` (ISO-8601) / `min_id`. Album messages
-  (shared Telegram `grouped_id`) are collapsed into one entry via `serialize_messages()`
-  in `client.py` — only one message per album otherwise carries the caption, so naive
-  per-message serialization made every other photo look caption-less.
-- `get_message_media(channel, message_id)` → `fastmcp.utilities.types.Image` — downloads a
+- `list_chats()` → `list[ChatInfo]` — every chat in the account's dialogs: channels,
+  groups, and private (`User`) chats, each tagged via `chat_type`
+  (`channel`/`megagroup`/`group`/`private`).
+- `read_chat_messages(chat, limit=50, offset_date=None, min_id=None)` →
+  `list[MessageInfo]` — resolves `chat` (public channels/groups need no join) and iterates
+  history newest-first, for channels, groups, or private chats. Paging via `offset_date`
+  (ISO-8601) / `min_id`. Album messages (shared Telegram `grouped_id`) are collapsed into
+  one entry via `serialize_messages()` in `client.py` — only one message per album otherwise
+  carries the caption, so naive per-message serialization made every other photo look
+  caption-less. The per-message `url` (`t.me/<username>/<id>`) is only populated for
+  `Channel` entities; basic groups and private chats have no valid public message link, so
+  it's left `None` rather than fabricated.
+- `get_message_media(chat, message_id)` → `fastmcp.utilities.types.Image` — downloads a
   message's photo (via `client.download_media`) so a multimodal agent can view/analyze it.
   Photos only (checks `message.photo`); size-capped by `TG_MAX_MEDIA_BYTES` (default 15 MB).
-  Not wired into `read_channel_messages` on purpose — embedding images in bulk history reads
+  Not wired into `read_chat_messages` on purpose — embedding images in bulk history reads
   would balloon every call with base64 payloads; fetch media only for the specific message
   that needs it.
-- `join_channel(channel)` → `ChannelInfo` — `JoinChannelRequest` for public refs,
-  `ImportChatInviteRequest` for `t.me/+`/`joinchat/` invite links.
+- `join_chat(chat)` → `ChatInfo` — `JoinChannelRequest` for public refs,
+  `ImportChatInviteRequest` for `t.me/+`/`joinchat/` invite links. Applies to channels/groups
+  only; private chats are already accessible and aren't "joined".
 
-`channel` may be a `@username`, a `t.me` link, or a numeric id (`_normalize_target` /
+`chat` may be a `@username`, a `t.me` link, or a numeric id (`_normalize_target` /
 `_resolve` in `server.py`). `FloodWaitError` and resolution failures are surfaced as
 `fastmcp.exceptions.ToolError` with actionable messages.
 
@@ -117,7 +125,7 @@ locally and on the remote host against the *same* session at the same time — g
 own authorized session, or run only one.
 
 Other ban-avoidance measures baked in:
-- `read_channel_messages` clamps `limit` to `MAX_MESSAGE_LIMIT` (env `TG_MAX_LIMIT`, default 100)
+- `read_chat_messages` clamps `limit` to `MAX_MESSAGE_LIMIT` (env `TG_MAX_LIMIT`, default 100)
   so an agent can't hammer the API with huge history pulls.
 - Joining is a separate, explicit tool (never automatic) — mass/rapid joins are a classic
   ban trigger.
